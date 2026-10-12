@@ -44,6 +44,7 @@ _spec.loader.exec_module(_mod)
 ZBeacon = _mod.ZBeacon
 AF_INET = _mod.AF_INET
 AF_PACKET = _mod.AF_PACKET
+AF_LINK = _mod.AF_LINK
 
 
 class ZBeaconIfaceTest(unittest.TestCase):
@@ -69,6 +70,24 @@ class ZBeaconIfaceTest(unittest.TestCase):
         self.assertFalse(ZBeacon._is_virtual_iface("eth0"))
         self.assertFalse(ZBeacon._is_virtual_iface("wlan0"))
         self.assertFalse(ZBeacon._is_virtual_iface("enp3s0"))
+
+    def test_prepare_socket_accepts_macos_af_link_mac(self):
+        beacon = self._beacon()
+        netinf = [
+            {
+                "en0": {
+                    AF_INET: {"addr": "192.168.1.20", "netmask": "255.255.255.0"},
+                    AF_LINK: {"addr": "11:22:33:44:55:66"},
+                }
+            },
+        ]
+        _zhelper.get_ifaddrs.return_value = netinf
+        with patch.object(beacon, "_ZBeacon__fill_gateways", return_value=(["en0"], [])):
+            beacon._prepare_socket()
+
+        self.assertEqual(str(beacon.address), "192.168.1.20")
+        self.assertEqual(beacon.interface_name, "en0")
+        self.assertEqual(beacon.mac, "11:22:33:44:55:66")
 
     def test_prepare_socket_prefers_default_route(self):
         beacon = self._beacon()

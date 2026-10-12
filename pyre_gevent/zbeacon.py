@@ -53,7 +53,8 @@ _TRANSIENT_SEND_ERRNOS = {
 }
 
 AF_INET = 2
-AF_PACKET = 17
+AF_PACKET = 17  # Linux link-layer (MAC) family in zhelper.get_ifaddrs()
+AF_LINK = 18  # BSD/macOS link-layer (MAC) family in zhelper.get_ifaddrs()
 # Skip typical container/VM virtual NICs when falling back without a gateway match
 _VIRTUAL_IFACE_PREFIXES = (
     "docker",
@@ -280,20 +281,23 @@ class ZBeacon(object):
 
         logger.debug(" + data_2: %s | %s | %s", data_2, data_2.get(AF_INET), data_2.keys())
 
-        data_17 = data.get(AF_PACKET)
-        if not data_17 and platform.startswith("win") and data_2.get("adapter"):
+        # Linux stores MAC under AF_PACKET (17); macOS/BSD under AF_LINK (18)
+        data_mac = data.get(AF_PACKET) or data.get(AF_LINK)
+        if not data_mac and platform.startswith("win") and data_2.get("adapter"):
             # last chance to get mac address on windows platform
             adapter = data_2.get("adapter")
             mac_addr = self.__search_mac_addr(adapter)
             if mac_addr:
-                data_17 = {"addr": mac_addr}
-        if not data_17:
-            logger.debug(" - No data_17 found for interface '{0}'.".format(name))
+                data_mac = {"addr": mac_addr}
+        if not data_mac:
+            logger.debug(
+                " - No MAC (AF_PACKET/AF_LINK) found for interface '{0}'.".format(name)
+            )
             return None
 
         address_str = data_2.get("addr")
         netmask_str = data_2.get("netmask")
-        mac_str = data_17.get("addr")
+        mac_str = data_mac.get("addr")
 
         if not address_str or not netmask_str:
             logger.debug(
