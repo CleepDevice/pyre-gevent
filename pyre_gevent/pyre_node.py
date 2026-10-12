@@ -4,7 +4,6 @@ import logging
 import struct
 import socket
 import time
-import sys
 import platform
 from .zactor import ZActor
 from .zbeacon import ZBeacon
@@ -90,11 +89,24 @@ class PyreNode(object):
             # Our hostname is provided by zbeacon
             self.port = self.inbox.bind_to_random_port("tcp://*")
             if self.port < 0:
-                # Die on bad interface or port exhaustion
-                logging.critical("Random port assignment for incoming messages failed. Exiting.")
-                sys.exit(-1)
-            else:
-                self.bound = True
+                # Do not sys.exit: this library runs inside a long-lived process
+                # (e.g. Cleep). Tear down the half-started beacon and notify the
+                # application so it can retry discovery.
+                logger.critical(
+                    "Random port assignment for incoming messages failed"
+                )
+                try:
+                    self.beacon.destroy()
+                except Exception:
+                    pass
+                self.beacon = None
+                self.beacon_socket = None
+                try:
+                    self.outbox.send_unicode("$TERM")
+                except Exception:
+                    pass
+                return
+            self.bound = True
             self.endpoint = "tcp://%s:%d" %(hostname, self.port)
 
             # Set broadcast/listen beacon
@@ -479,7 +491,15 @@ class PyreNode(object):
             self.outbox.send_unicode("$TERM")
             return
 
-        beacon = struct.unpack('cccb16sH', frame)
+        try:
+            beacon = struct.unpack('cccb16sH', frame)
+        except struct.error:
+            logger.warning(
+                "Malformed ZRE beacon frame (len=%s), ignoring",
+                len(frame) if frame is not None else 0,
+            )
+            return
+
         # Ignore anything that isn't a valid beacon
         if beacon[3] != BEACON_VERSION:
             logger.warning("Invalid ZRE Beacon version: {0}".format(beacon[3]))

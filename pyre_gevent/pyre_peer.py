@@ -189,7 +189,7 @@ class PyrePeer(object):
             msg.get_command(),
             self.name,
             msg.get_sequence()) )
-        if msg.get_command == "HELLO":
+        if msg.get_command() == "HELLO":
             self.want_sequence = 1
         else:
             self.want_sequence += 1
@@ -201,6 +201,6 @@ class PyrePeer(object):
                 self.name,
                 self.want_sequence,
                 msg.get_sequence())
-            return True;
+            return True
         return False
     # end check_message

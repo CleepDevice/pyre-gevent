@@ -107,7 +107,7 @@ class ZActor(object):
     # --------------------------------------------------------------------------
     # Probe the supplied object, and report if it looks like a zactor_t.
     def is_zactor(self):
-        return isinstance(ZActor, self)
+        return isinstance(self, ZActor)
 
     # --------------------------------------------------------------------------
     # Probe the supplied reference. If it looks like a zactor_t instance,
