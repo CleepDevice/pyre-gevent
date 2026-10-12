@@ -21,6 +21,7 @@
     the CZMQ v3 API (meaning, zsock).
 """
 
+import errno
 import logging
 import ipaddress
 import socket
@@ -40,8 +41,16 @@ logger = logging.getLogger(__name__)
 INTERVAL_DFLT = 1.0
 BEACON_MAX = 255  # Max size of beacon data
 MULTICAST_GRP = "225.25.25.25"
-ENETDOWN = 50  # socket error, network is down
-ENETUNREACH = 51  # socket error, network unreachable
+# Transient network errors: keep beacon alive and retry (use portable errno values —
+# hardcoding 50/51 was macOS-only and made Linux treat ENETDOWN as fatal).
+_TRANSIENT_SEND_ERRNOS = {
+    errno.ENETDOWN,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.EADDRNOTAVAIL,
+    errno.ENETRESET,
+    errno.EHOSTDOWN if hasattr(errno, "EHOSTDOWN") else -1,
+}
 
 AF_INET = 2
 AF_PACKET = 17
@@ -417,22 +426,23 @@ class ZBeacon(object):
             )
 
         except OSError as e:
-
-            # network down, just wait, it could come back up again.
-            # socket call errors 50 and 51 relate to the network being
-            # down or unreachable, the recommended action to take is to
-            # try again so we don't terminate in these cases.
-            if e.errno in [ENETDOWN, ENETUNREACH]:
-                pass
-
-            # all other cases, we'll terminate
+            # Network may be temporarily down or interface may be changing.
+            # Keep the beacon actor alive and retry on the next interval —
+            # terminating here leaves upper layers with a silent "zombie" node
+            # that no longer advertises on the LAN.
+            if e.errno in _TRANSIENT_SEND_ERRNOS:
+                logger.warning(
+                    "Beacon send deferred (transient errno=%s): %s", e.errno, e
+                )
             else:
-                logger.debug("Network seems gone, exiting zbeacon")
-                self.terminated = True
+                logger.warning(
+                    "Beacon send failed (errno=%s), keeping beacon alive: %s",
+                    e.errno,
+                    e,
+                )
 
-        except socket.error:
-            logger.debug("Network seems gone, exiting zbeacon")
-            self.terminated = True
+        except socket.error as e:
+            logger.warning("Beacon send failed, keeping beacon alive: %s", e)
 
     def run(self):
         # Signal actor successfully initialized

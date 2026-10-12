@@ -468,8 +468,12 @@ class PyreNode(object):
         try:
             ipaddress, frame = self.beacon_socket.recv_multipart()
         except ValueError:
-            logger.debug("ZBeacon terminated")
-            self.poller.unregister(self.beacon_socket)
+            # Beacon actor exited: notify application so it can restart discovery.
+            logger.warning("ZBeacon terminated — discovery is no longer active")
+            try:
+                self.poller.unregister(self.beacon_socket)
+            except Exception:
+                pass
             self.beacon = None
             self.beacon_socket = None
             self.outbox.send_unicode("$TERM")
