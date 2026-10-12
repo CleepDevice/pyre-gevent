@@ -56,6 +56,7 @@ class ZBeaconIfaceTest(unittest.TestCase):
         beacon.network_address = None
         beacon.broadcast_address = None
         beacon.interface_name = None
+        beacon.forced_interface = None
         beacon.udp_ready = False
         beacon.terminated = False
         beacon.pipe = MagicMock()
@@ -192,6 +193,83 @@ class ZBeaconIfaceTest(unittest.TestCase):
         self.assertTrue(beacon.terminated)
         self.assertEqual(str(beacon.address), "127.0.0.1")
         beacon.pipe.send_unicode.assert_called_with("127.0.0.1")
+
+    def test_prepare_socket_honours_forced_interface(self):
+        """Forced name must win even if another iface is the default route."""
+        beacon = self._beacon()
+        netinf = [
+            {
+                "eth0": {
+                    AF_INET: {"addr": "192.168.1.10", "netmask": "255.255.255.0"},
+                    AF_PACKET: {"addr": "aa:bb:cc:dd:ee:01"},
+                }
+            },
+            {
+                "wlan0": {
+                    AF_INET: {"addr": "10.0.0.5", "netmask": "255.255.255.0"},
+                    AF_PACKET: {"addr": "aa:bb:cc:dd:ee:02"},
+                }
+            },
+        ]
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=(["eth0"], [])
+        ):
+            beacon._prepare_socket("wlan0")
+
+        self.assertEqual(beacon.interface_name, "wlan0")
+        self.assertEqual(str(beacon.address), "10.0.0.5")
+
+    def test_prepare_socket_forced_missing_falls_to_loopback(self):
+        beacon = self._beacon()
+        netinf = [
+            {
+                "eth0": {
+                    AF_INET: {"addr": "192.168.1.10", "netmask": "255.255.255.0"},
+                    AF_PACKET: {"addr": "aa:bb:cc:dd:ee:ff"},
+                }
+            },
+        ]
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=(["eth0"], [])
+        ):
+            beacon._prepare_socket("does-not-exist")
+
+        self.assertEqual(beacon.interface_name, "loopback")
+        self.assertEqual(str(beacon.address), "127.0.0.1")
+
+    def test_prepare_socket_forced_allows_virtual_iface(self):
+        beacon = self._beacon()
+        netinf = [
+            {
+                "docker0": {
+                    AF_INET: {"addr": "172.17.0.1", "netmask": "255.255.0.0"},
+                    AF_PACKET: {"addr": "02:42:00:00:00:01"},
+                }
+            },
+        ]
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=([], [])
+        ):
+            beacon._prepare_socket("docker0")
+
+        self.assertEqual(beacon.interface_name, "docker0")
+        self.assertEqual(str(beacon.address), "172.17.0.1")
+
+    def test_prepare_udp_uses_forced_interface_attribute(self):
+        beacon = self._beacon()
+        beacon.forced_interface = "eth0"
+        prepared = []
+
+        def fake_prepare(iface=None):
+            prepared.append(iface)
+            beacon.address = "192.168.1.10"
+            beacon.broadcast_address = ipaddress.IPv4Address("192.168.1.255")
+
+        with patch.object(beacon, "_prepare_socket", side_effect=fake_prepare):
+            ok = beacon.prepare_udp()
+
+        self.assertTrue(ok)
+        self.assertEqual(prepared, ["eth0"])
 
 
 if __name__ == "__main__":

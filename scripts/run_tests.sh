@@ -6,6 +6,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Unit tests first, then integration (pyre last can be flaky under gevent/zmq.green).
 MODULES="
 tests.test_zbeacon_send
 tests.test_zbeacon_iface
@@ -13,8 +14,8 @@ tests.test_pyre_peer_seq
 tests.test_zactor_is_zactor
 tests.test_zhelper
 tests.test_zactor
-tests.test_zbeacon
 tests.test_pyre
+tests.test_zbeacon
 "
 
 failed=0

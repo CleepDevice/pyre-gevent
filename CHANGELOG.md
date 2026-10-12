@@ -27,3 +27,6 @@ devices and modernizes packaging / CI.
 ### Added
 - Unit tests for beacon send resilience and interface selection
 - `scripts/run_tests.sh` (per-module processes) run by the publish workflow before upload
+- Robust `Pyre.set_interface(name)` (before `start`): forces the UDP beacon NIC
+  via `SET INTERFACE`, aligned with zeromq/pyre; no silent fallback to another
+  iface when the forced name is missing/unusable

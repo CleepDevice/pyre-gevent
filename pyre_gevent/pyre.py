@@ -114,10 +114,13 @@ class Pyre(object):
         self.actor.send_unicode(interval)
 
     def set_interface(self, value):
-        """Set network interface for UDP beacons. If you do not set this, CZMQ will
-        choose an interface for you. On boxes with several interfaces you should
-        specify which one you want to use, or strange things can happen."""
-        self.actor.send_unicode('SET INTERFACE', zmq.SNDMORE)
+        """Force the network interface used for UDP beacons (e.g. ``\"eth0\"``).
+
+        Must be called **before** :meth:`start`. If unset, the beacon picks a
+        private LAN iface (default-route first). A single digit selects an
+        interface by index (zeromq/pyre compatibility).
+        """
+        self.actor.send_unicode("SET INTERFACE", zmq.SNDMORE)
         self.actor.send_unicode(value)
 
     # TODO: check args from zyre

@@ -11,10 +11,14 @@ from pyre_gevent.zactor import ZActor
 from pyre_gevent.zbeacon import ZBeacon
 
 
-def _configure_beacon(actor, port, interface=b""):
-    """Send CONFIGURE with the packed interface+port format expected by ZBeacon."""
+def _configure_beacon(actor, port, interface=None):
+    """Configure beacon; optional interface via SET INTERFACE (upstream style)."""
+    if interface:
+        if isinstance(interface, bytes):
+            interface = interface.decode("utf-8")
+        actor.send_unicode("SET INTERFACE", zmq.SNDMORE)
+        actor.send_unicode(interface)
     actor.send_unicode("CONFIGURE", zmq.SNDMORE)
-    actor.send(struct.pack("I", len(interface)) + interface, zmq.SNDMORE)
     actor.send(struct.pack("I", port))
     return actor.recv_unicode()
 

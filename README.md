@@ -43,7 +43,7 @@ shout().
 
 For now use Pip:
 
-    pip install https://github.com/zeromq/pyre/archive/master.zip
+    pip install pyre-gevent
 
 ## API
 
@@ -56,8 +56,12 @@ For now use Pip:
     #  and come in each ENTER message.
     node.set_header(name, value)
 
-    #  (TODO: Currently a Pyre node starts immediately) Start node, after setting header values. When you start a node it
-    #  begins discovery and connection.
+    #  Optional: force the LAN interface used for UDP beacons (before start).
+    #  Example: node.set_interface("eth0")  — or "wlan0", "en0", …
+    #  If unset, pyre-gevent picks a private iface (default-route first).
+    node.set_interface(iface_name)
+
+    #  Start node after headers / interface. Begins discovery and connection.
     node.start()
 
     #  Stop node, this signals to other peers that this node will go away.

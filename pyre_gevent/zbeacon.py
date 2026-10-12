@@ -98,6 +98,9 @@ class ZBeacon(object):
         self.network_address = None
         self.broadcast_address = None
         self.interface_name = None
+        # Set via SET INTERFACE (or non-empty name in CONFIGURE). When set,
+        # only this iface is used — no silent fallback to another NIC.
+        self.forced_interface = None
         self.run()
 
     def __del__(self):
@@ -108,10 +111,16 @@ class ZBeacon(object):
         """
         Resolve interface and bind the UDP socket.
 
+        Args:
+            interface_name (str|None): forced iface name; falls back to
+                ``forced_interface`` from SET INTERFACE when empty/None.
+
         Returns:
             bool: True if the beacon socket is ready to send/receive.
         """
         self.udp_ready = False
+        if not interface_name:
+            interface_name = self.forced_interface
         try:
             self._prepare_socket(interface_name)
         except ValueError:
@@ -359,37 +368,65 @@ class ZBeacon(object):
 
         gateway_candidates = []
         other_candidates = []
+        forced = bool(interface_name)
 
-        for iface in netinf:
-            # ipv4 only currently and needs a valid broadcast address
-            for name, data in iface.items():
-                logger.debug("------------------")
-                logger.debug("Checking interface '{0}'".format(name))
-                logger.debug("Data: %s", data)
-                if interface_name and interface_name != name:
-                    logger.debug(
-                        " - Interface '{0}' is not specified one '{1}'".format(
-                            name, interface_name
+        # Upstream-compatible: a single digit selects iface by index in netinf
+        if (
+            forced
+            and len(interface_name) == 1
+            and interface_name.isdigit()
+            and netinf
+        ):
+            array_index = int(interface_name)
+            if 0 <= array_index < len(netinf):
+                logger.debug(
+                    "Forced interface index %s → %s",
+                    array_index,
+                    list(netinf[array_index].keys()),
+                )
+                for name, data in netinf[array_index].items():
+                    info = self._parse_usable_iface(name, data)
+                    if info:
+                        other_candidates.append(info)
+            else:
+                logger.error(
+                    "Forced interface index %s out of range (0..%s)",
+                    array_index,
+                    max(0, len(netinf) - 1),
+                )
+        else:
+            for iface in netinf:
+                # ipv4 only currently and needs a valid broadcast address
+                for name, data in iface.items():
+                    logger.debug("------------------")
+                    logger.debug("Checking interface '{0}'".format(name))
+                    logger.debug("Data: %s", data)
+                    if forced and interface_name != name:
+                        logger.debug(
+                            " - Interface '{0}' is not forced one '{1}'".format(
+                                name, interface_name
+                            )
                         )
-                    )
-                    continue
+                        continue
 
-                # Auto-selection skips virtual NICs; explicit interface_name wins
-                if not interface_name and self._is_virtual_iface(name):
-                    logger.debug(
-                        " - Interface '{0}' looks virtual, skip for beacon".format(name)
-                    )
-                    continue
+                    # Auto-selection skips virtual NICs; forced name wins
+                    if not forced and self._is_virtual_iface(name):
+                        logger.debug(
+                            " - Interface '{0}' looks virtual, skip for beacon".format(
+                                name
+                            )
+                        )
+                        continue
 
-                info = self._parse_usable_iface(name, data)
-                if not info:
-                    continue
+                    info = self._parse_usable_iface(name, data)
+                    if not info:
+                        continue
 
-                if name in gateway_interface_names:
-                    priority = gateway_interface_names.index(name)
-                    gateway_candidates.append((priority, info))
-                else:
-                    other_candidates.append(info)
+                    if name in gateway_interface_names:
+                        priority = gateway_interface_names.index(name)
+                        gateway_candidates.append((priority, info))
+                    else:
+                        other_candidates.append(info)
 
         logger.debug("Finished scanning interfaces.")
 
@@ -401,13 +438,13 @@ class ZBeacon(object):
                 "Selected gateway interface '{0}'".format(selected["interface_name"])
             )
         elif other_candidates:
-            # No gateway match yet (boot / flap): use first private LAN iface
             selected = other_candidates[0]
-            logger.warning(
-                "No default-route interface for beacon; using '%s' (%s)",
-                selected["interface_name"],
-                selected["address"],
-            )
+            if not forced:
+                logger.warning(
+                    "No default-route interface for beacon; using '%s' (%s)",
+                    selected["interface_name"],
+                    selected["address"],
+                )
 
         if selected:
             self.address = selected["address"]
@@ -415,14 +452,25 @@ class ZBeacon(object):
             self.network_address = selected["network_address"]
             self.broadcast_address = selected["broadcast_address"]
             self.interface_name = selected["interface_name"]
+            if forced:
+                logger.info(
+                    "Using forced beacon interface '%s' (%s)",
+                    self.interface_name,
+                    self.address,
+                )
         else:
-            # Last resort: loopback + multicast. Upper layers should treat
-            # 127.0.0.1 as "not ready for LAN discovery" and retry.
-            logger.warning(
-                "No usable LAN interface found for ZRE beacon; falling back to "
-                "127.0.0.1 (discovery will not work on the LAN until a network "
-                "is available)"
-            )
+            if forced:
+                logger.error(
+                    "Forced interface %r not found or not usable for ZRE beacon",
+                    interface_name,
+                )
+            else:
+                logger.warning(
+                    "No usable LAN interface found for ZRE beacon; falling back to "
+                    "127.0.0.1 (discovery will not work on the LAN until a network "
+                    "is available)"
+                )
+            # Last resort: loopback. Upper layers treat 127.0.0.1 as not ready.
             self.network_address = ipaddress.IPv4Address(u("127.0.0.1"))
             self.broadcast_address = ipaddress.IPv4Address(u(MULTICAST_GRP))
             self.interface_name = "loopback"
@@ -437,6 +485,8 @@ class ZBeacon(object):
 
     def configure(self, interface_name, port_nbr):
         self.port_nbr = port_nbr
+        if not interface_name:
+            interface_name = self.forced_interface
         ok = self.prepare_udp(interface_name)
         if not ok:
             logger.error(
@@ -464,17 +514,26 @@ class ZBeacon(object):
 
         if command == "VERBOSE":
             self.verbose = True
+        elif command == "SET INTERFACE":
+            # Must be called before CONFIGURE (same as zeromq/pyre).
+            name = request.pop(0).decode("UTF-8")
+            self.forced_interface = name or None
+            logger.debug("zbeacon: forced interface set to %r", self.forced_interface)
         elif command == "CONFIGURE":
-            # unpacking code from https://bit.ly/2qN3ZUz
-            interface_data = request.pop(0)
-
-            (interface_name_len,), interface = (
-                struct.unpack("I", interface_data[:4]),
-                interface_data[4:],
-            )
-            interface = interface.decode("UTF-8")
-
-            port = struct.unpack("I", request.pop(0))[0]
+            # Two wire formats:
+            # 1) legacy (ropod): packed interface name + port
+            # 2) upstream: port only (use SET INTERFACE for forcing)
+            if len(request) >= 2:
+                interface_data = request.pop(0)
+                (_interface_name_len,), interface = (
+                    struct.unpack("I", interface_data[:4]),
+                    interface_data[4:],
+                )
+                interface = interface.decode("UTF-8")
+                port = struct.unpack("I", request.pop(0))[0]
+            else:
+                port = struct.unpack("I", request.pop(0))[0]
+                interface = self.forced_interface or ""
             self.configure(interface, port)
         elif command == "PUBLISH":
             self.transmit = request.pop(0)
