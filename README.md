@@ -202,10 +202,14 @@ To change the debug level:
 
 ## Requirements
 
-Python only needs PyZMQ. On some older versions of Python 
-it also needs the [ipaddress](https://docs.python.org/3.4/library/ipaddress.html?highlight=ipaddress#module-ipaddress) module.
+Python **3.9+**. Runtime dependencies are declared once in `setup.py` (`install_requires`):
 
-The recommended Python version is 3.3+
+- **gevent** — required: this fork uses `zmq.green` and must run under gevent
+- **pyzmq** — ZeroMQ bindings (`zmq.green`)
+- **netaddr** — private-IP checks for beacon interface selection
+- **netifaces-plus** — gateway / interface helpers (imports as `netifaces`)
+
+Install with `pip install .` (or from the published package). `ipaddress` is in the standard library.
 
 
 ## Project Organization
