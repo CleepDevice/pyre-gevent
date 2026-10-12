@@ -15,10 +15,12 @@ setup(
     packages=["pyre_gevent"],
     include_package_data=True,
     python_requires=">=3.9",
+    # Floors kept compatible with cleepapp-cleepbus on Cleep/Bullseye today:
+    # gevent 22.10.2 + pyzmq 22.3.0 prebuild wheels (cp39 armv7l).
     install_requires=[
-        "gevent>=20.9.0",
-        "pyzmq>=19.0.0",
-        "netaddr>=0.8.0",
-        "netifaces-plus>=0.2.0",
+        "gevent>=22.10.2",
+        "pyzmq>=22.3.0",
+        "netaddr>=1.0.0",
+        "netifaces-plus>=0.12.0",
     ],
 )

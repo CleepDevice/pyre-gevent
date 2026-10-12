@@ -204,10 +204,11 @@ To change the debug level:
 
 Python **3.9+**. Runtime dependencies are declared once in `setup.py` (`install_requires`):
 
-- **gevent** — required: this fork uses `zmq.green` and must run under gevent
-- **pyzmq** — ZeroMQ bindings (`zmq.green`)
-- **netaddr** — private-IP checks for beacon interface selection
-- **netifaces-plus** — gateway / interface helpers (imports as `netifaces`)
+- **gevent** `>=22.10.2` — required: this fork uses `zmq.green` (Cleep/Bullseye ships 22.10.2)
+- **pyzmq** `>=22.3.0` — ZeroMQ bindings (`zmq.green`; matches Cleep prebuild wheel)
+- **netaddr** `>=1.0.0` — private-IP checks for beacon interface selection
+- **netifaces-plus** `>=0.12.0` — gateway / interface helpers (imports as `netifaces`)
+
 
 Install with `pip install .` (or from the published package). `ipaddress` is in the standard library.
 
