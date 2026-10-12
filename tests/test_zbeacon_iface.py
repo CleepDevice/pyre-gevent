@@ -81,8 +81,9 @@ class ZBeaconIfaceTest(unittest.TestCase):
                 }
             },
         ]
-        _zhelper.get_ifaddrs.return_value = netinf
-        with patch.object(beacon, "_ZBeacon__fill_gateways", return_value=(["en0"], [])):
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=(["en0"], [])
+        ):
             beacon._prepare_socket()
 
         self.assertEqual(str(beacon.address), "192.168.1.20")
@@ -105,8 +106,9 @@ class ZBeaconIfaceTest(unittest.TestCase):
                 }
             },
         ]
-        _zhelper.get_ifaddrs.return_value = netinf
-        with patch.object(beacon, "_ZBeacon__fill_gateways", return_value=(["eth0"], [])):
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=(["eth0"], [])
+        ):
             beacon._prepare_socket()
 
         self.assertEqual(str(beacon.address), "192.168.1.10")
@@ -122,8 +124,9 @@ class ZBeaconIfaceTest(unittest.TestCase):
                 }
             },
         ]
-        _zhelper.get_ifaddrs.return_value = netinf
-        with patch.object(beacon, "_ZBeacon__fill_gateways", return_value=([], [])):
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=([], [])
+        ):
             beacon._prepare_socket()
 
         self.assertEqual(str(beacon.address), "192.168.1.10")
@@ -139,8 +142,9 @@ class ZBeaconIfaceTest(unittest.TestCase):
                 }
             },
         ]
-        _zhelper.get_ifaddrs.return_value = netinf
-        with patch.object(beacon, "_ZBeacon__fill_gateways", return_value=([], [])):
+        with patch.object(_mod.zhelper, "get_ifaddrs", return_value=netinf), patch.object(
+            beacon, "_ZBeacon__fill_gateways", return_value=([], [])
+        ):
             beacon._prepare_socket()
 
         self.assertEqual(str(beacon.address), "127.0.0.1")

@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 class PyrePeer(object):
 
-    PEER_EXPIRED = 30              # expire after 10s
-    PEER_EVASIVE = 10              # mark evasive after 5s
+    PEER_EXPIRED = 30              # expire after 30s without activity
+    PEER_EVASIVE = 10              # mark evasive after 10s without activity
 
     def __init__(self, ctx, identity):
         # TODO: what to do with container?
@@ -18,8 +18,8 @@ class PyrePeer(object):
         self.endpoint = None     # Endpoint connected to
         self.name = "notset"     # Peer's public name
         self.origin = "unknown"  # Origin node's public name
-        self.evasive_at = 0      # Peer is being evasive
-        self.expired_at = 0      # Peer has expired by now
+        self.evasive_at = 0      # Timestamp when peer becomes evasive
+        self.expired_at = 0      # Timestamp when peer is considered expired
         self.connected = False   # Peer will send messages
         self.ready = False       # Peer has said Hello to us
         self.status = 0          # Our status counter
@@ -123,16 +123,6 @@ class PyrePeer(object):
         self.evasive_at = time.time() + self.PEER_EVASIVE
         self.expired_at = time.time() + self.PEER_EXPIRED
     # end refresh
-
-    # Return future evasive time
-    def evasive_at(self):
-        return self.evasive_at
-    # end evasiv_at
-
-    # Return future expired time
-    def expired_at(self):
-        return self.expired_at
-    # end expired_at
 
     # Return peer name
     def get_name(self):

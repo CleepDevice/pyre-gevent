@@ -411,8 +411,9 @@ class PyreNode(object):
         zmsg = ZreMsg()
         try:
             zmsg.recv(self.inbox)
-        except:
-            # Handle invalid received data that could occurs if peer crashed before sending all data
+        except Exception:
+            # Invalid/truncated data (e.g. peer crashed mid-send)
+            logger.debug("Ignoring invalid/incomplete peer message", exc_info=True)
             return
         #msgs = self.inbox.recv_multipart()
         # Router socket tells us the identity of this peer

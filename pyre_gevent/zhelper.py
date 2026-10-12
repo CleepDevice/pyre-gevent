@@ -31,7 +31,8 @@ def zcreate_pipe(ctx, hwm=1000):
     while True:
         try:
             frontend.bind(endpoint)
-        except:
+        except zmq.ZMQError:
+            # Address collision on inproc endpoint — pick another name
             endpoint = "inproc://zactor-%04x-%04x\n"\
                  %(random.randint(0, 0x10000), random.randint(0, 0x10000))
         else:
