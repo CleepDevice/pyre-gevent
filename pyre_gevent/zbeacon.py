@@ -323,18 +323,11 @@ class ZBeacon(object):
         if isinstance(mac_str, bytes):
             mac_str = mac_str.decode("utf8")
 
-        # keep only private interface
+        # keep only private interface (netaddr >= 1.0)
         ip_address = netaddr.IPAddress(address_str)
-        # handle netaddr breaking changes
-        if netaddr.__version__.startswith("0."):
-            # is_private does not exist anymore on new IpAddress lib version
-            # pylint: disable=no-member
-            ip_is_private = ip_address.is_private()
-        else:
-            ip_is_private = (
-                ip_address.is_ipv4_private_use()
-                or ip_address.is_ipv6_unique_local()
-            )
+        ip_is_private = (
+            ip_address.is_ipv4_private_use() or ip_address.is_ipv6_unique_local()
+        )
         if ip_address and not ip_is_private:
             logger.debug(
                 " - Interface '{0}' refers to public ip address, drop it.".format(name)

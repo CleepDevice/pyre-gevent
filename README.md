@@ -1,220 +1,69 @@
-Pyre (Green version)
-====================
+# pyre-gevent
 
-This is a Python port of [Zyre](http://zyre.org) 1.0, implementing the same [ZRE protocol](http://rfc.zeromq.org/spec:36).
+Python [ZRE](http://rfc.zeromq.org/spec:36) / [Zyre](http://zyre.org) stack for
+**gevent**, based on [zeromq/pyre](https://github.com/zeromq/pyre).
 
-This version is using [green version](https://github.com/zeromq/pyzmq/tree/master/zmq/green) of PyZMQ which makes it compatible with gevent.
+Used by Cleep (`cleepapp-cleepbus`) for LAN device discovery and messaging.
 
-# Pyre - an open-source framework for proximity-based peer-to-peer applications
+```sh
+pip install pyre-gevent
+```
 
-## Description
+## Concepts
 
-Pyre does local area discovery and clustering. A Pyre node broadcasts
-UDP beacons, and connects to peers that it finds. This class wraps a
-Pyre node with a message-based API.
+| Piece | Role |
+|-------|------|
+| **UDP beacon** (`ZBeacon`) | Broadcasts presence on the LAN (default port **5670**) |
+| **TCP inbox** | Peers connect after discovery; whispers / shouts go here |
+| **Groups** | Named multicast channels (`join` / `shout`) |
+| **Headers** | Key/value metadata exchanged on `ENTER` |
 
-All incoming events are messages delivered via the recv call of a Pyre
-instance. The first frame defines the type of the message, and following
-frames provide further values:
+**Interface selection**
 
-    ENTER fromnode headers
-        a new peer has entered the network
-    EXIT fromnode
-        a peer has left the network
-    JOIN fromnode groupname
-        a peer has joined a specific group
-    LEAVE fromnode groupname
-        a peer has joined a specific group
-    WHISPER fromnode message
-        a peer has sent this node a message
-    SHOUT fromnode groupname message
-        a peer has sent one of our groups a message
+- Default: pick a private LAN iface (default-route / gateway first). Virtual
+  NICs (`docker0`, `veth*`, …) are skipped unless forced.
+- Optional: `node.set_interface("eth0")` **before** `start()` forces that NIC.
+  If it is missing or unusable, discovery fails cleanly (no silent fallback).
 
-In SHOUT and WHISPER the message is a single frame in this version
-of Pyre. In ENTER, the headers frame contains a packed dictionary, 
-that can be unpacked using json.loads(msg) (see chat client).
+**Resilience (this fork)**
 
-To join or leave a group, use the join() and leave() methods.
-To set a header value, use the set_header() method. To send a message
-to a single peer, use whisper(). To send a message to a group, use
-shout().
+- Transient UDP send errors (`ENETDOWN`, …) do **not** kill the beacon.
+- Beacon only sends when the UDP socket is ready (`udp_ready`).
+- Apps (e.g. cleepbus) can restart discovery on `$TERM` / network events.
 
-## Installation
+**Not implemented:** Zyre gossip / `SET ENDPOINT` (UDP beacon mode only).
 
-For now use Pip:
-
-    pip install pyre-gevent
-
-## API
-
-    import pyre
-    #  Constructor, creates a new Zyre node. Note that until you start the
-    #  node it is silent and invisible to other nodes on the network.
-    node = pyre.Pyre()
-
-    #  Set node header; these are provided to other nodes during discovery
-    #  and come in each ENTER message.
-    node.set_header(name, value)
-
-    #  Optional: force the LAN interface used for UDP beacons (before start).
-    #  Example: node.set_interface("eth0")  — or "wlan0", "en0", …
-    #  If unset, pyre-gevent picks a private iface (default-route first).
-    node.set_interface(iface_name)
-
-    #  Start node after headers / interface. Begins discovery and connection.
-    node.start()
-
-    #  Stop node, this signals to other peers that this node will go away.
-    #  This is polite; however you can also just destroy the node without
-    #  stopping it.
-    node.stop()
-
-    #  Join a named group; after joining a group you can send messages to
-    #  the group and all Zyre nodes in that group will receive them.
-    node.join(group)
-
-    #  Leave a group
-    node.leave(group)
-
-    #  Receive next message from network; the message may be a control
-    #  message (ENTER, EXIT, JOIN, LEAVE) or data (WHISPER, SHOUT).
-    #  Returns a list of message frames
-    msgs = node.recv();
-
-    # Send message to single peer, specified as a UUID object (import uuid)
-    # Destroys message after sending
-    node.whisper(peer, msg)
-
-    # Send message to a named group
-    # Destroys message after sending
-    node.shout(group, msg);
-
-    #  Send string to single peer specified as a UUID string.
-    #  String is formatted using printf specifiers.
-    node.whispers(peer, msg_string)
-
-    #  Send message to a named group
-    #  Destroys message after sending
-    node.shouts(group, msg_string);
-        
-    #  Return handle to the Zyre node, for polling
-    node.get_socket()
-    # use node.get_socket().getsockopt(zmq.FD) to acquire 
-    # the filedescriptor
-    # Don't use this for getting Pyre events you can use the 
-    # node.inbox to get those events
-
-## Example Chat Client
+## Quick API
 
 ```python
-try:
-    from zyre_pyzmq import Zyre as Pyre
-except Exception as e:
-    print("using Python native module", e)
-    from pyre import Pyre 
+from pyre_gevent import Pyre
 
-from pyre import zhelper 
-import zmq 
-import uuid
-import logging
-import sys
-import json
+node = Pyre("my-node")
+node.set_header("role", "device")
+# node.set_interface("eth0")   # optional, before start
+node.start()
+node.join("CLEEP")
 
-def chat_task(ctx, pipe):
-    n = Pyre("CHAT")
-    n.set_header("CHAT_Header1","example header1")
-    n.set_header("CHAT_Header2","example header2")
-    n.join("CHAT")
-    n.start()
+# events: ENTER / EXIT / JOIN / LEAVE / WHISPER / SHOUT
+frames = node.recv()
 
-    poller = zmq.Poller()
-    poller.register(pipe, zmq.POLLIN)
-    print(n.socket())
-    poller.register(n.socket(), zmq.POLLIN)
-    print(n.socket())
-    while(True):
-        items = dict(poller.poll())
-        print(n.socket(), items)
-        if pipe in items and items[pipe] == zmq.POLLIN:
-            message = pipe.recv()
-            # message to quit
-            if message.decode('utf-8') == "$$STOP":
-                break
-            print("CHAT_TASK: %s" % message)
-            n.shouts("CHAT", message.decode('utf-8'))
-        else:
-        #if n.socket() in items and items[n.socket()] == zmq.POLLIN:
-            cmds = n.recv()
-            msg_type = cmds.pop(0)
-            print("NODE_MSG TYPE: %s" % msg_type)
-            print("NODE_MSG PEER: %s" % uuid.UUID(bytes=cmds.pop(0)))
-            print("NODE_MSG NAME: %s" % cmds.pop(0))
-            if msg_type.decode('utf-8') == "SHOUT":
-                print("NODE_MSG GROUP: %s" % cmds.pop(0))
-            elif msg_type.decode('utf-8') == "ENTER":
-                headers = json.loads(cmds.pop(0).decode('utf-8'))
-                print("NODE_MSG HEADERS: %s" % headers)
-                for key in headers:
-                    print("key = {0}, value = {1}".format(key, headers[key]))
-            print("NODE_MSG CONT: %s" % cmds)
-    n.stop()
-
-
-if __name__ == '__main__':
-    # Create a StreamHandler for debugging
-    logger = logging.getLogger("pyre")
-    logger.setLevel(logging.INFO)
-    logger.addHandler(logging.StreamHandler())
-    logger.propagate = False
-
-    ctx = zmq.Context()
-    chat_pipe = zhelper.zthread_fork(ctx, chat_task)
-    # input in python 2 is different
-    if sys.version_info.major < 3:
-        input = raw_input
-
-    while True:
-        try:
-            msg = input()
-            chat_pipe.send(msg.encode('utf_8'))
-        except (KeyboardInterrupt, SystemExit):
-            break
-    chat_pipe.send("$$STOP".encode('utf_8'))
-    print("FINISHED")
+node.whisper(peer_uuid, b"hello")
+node.shout("CLEEP", b"hello all")
+node.stop()
 ```
 
-Look at the [ZOCP](https://github.com/z25/pyZOCP) project for examples of how Pyre can be 
-integrated into different environments and frameworks, i.e.:
-- [Urwid](https://github.com/z25/pyZOCP/blob/master/examples/urwZOCP.py)
-- [Blender](https://github.com/z25/pyZOCP/blob/master/examples/BpyZOCP.py)
-- [Glib](https://github.com/z25/pyZOCP/blob/master/examples/glib_node.py)
-- [QT](https://github.com/z25/pyZOCP/blob/master/examples/qt_ui_node.py)
+Import package name: `pyre_gevent` (PyPI: `pyre-gevent`).
 
-
-Pyre uses the [Python Logging](https://docs.python.org/3.4/library/logging.html) module.
-To change the debug level:
-
-```
-    # Create a StreamHandler for debugging
-    logger = logging.getLogger("pyre")
-    logger.setLevel(logging.INFO)
-    # i.e. logging.DEBUG, logging.WARNING
-    logger.addHandler(logging.StreamHandler())
-    logger.propagate = False
-
-```
+See `examples/chat.py` for a fuller chat sample.
 
 ## Requirements
 
-Python **3.9+**. Runtime dependencies are declared once in `setup.py` (`install_requires`):
+Python **≥ 3.9**. Declared in `setup.py`:
 
-- **gevent** `>=22.10.2` — required: this fork uses `zmq.green` (Cleep/Bullseye ships 22.10.2)
-- **pyzmq** `>=22.3.0` — ZeroMQ bindings (`zmq.green`; matches Cleep prebuild wheel)
-- **netaddr** `>=1.0.0` — private-IP checks for beacon interface selection
-- **netifaces-plus** `>=0.12.0` — gateway / interface helpers (imports as `netifaces`)
-
-
-Install with `pip install .` (or from the published package). `ipaddress` is in the standard library.
+- `gevent >= 22.10.2`
+- `pyzmq >= 22.3.0`
+- `netaddr >= 1.0.0`
+- `netifaces-plus >= 0.12.0`
 
 ## Tests
 
@@ -223,22 +72,19 @@ pip install .
 sh scripts/run_tests.sh
 ```
 
-Each module runs in its own process (avoids gevent/zmq.green teardown crashes).
+Each test module runs in its own process (avoids gevent / `zmq.green` teardown
+crashes on a single long `discover` run).
 
-## Release (PyPI)
+## Release
 
-1. Bump `version` in `setup.py` and `pyre_gevent/__init__.py` (keep in sync).
+1. Bump `version` in `setup.py` and `pyre_gevent/__init__.py`.
 2. Update `CHANGELOG.md`.
-3. Commit, then tag and push: `git tag v1.0.0 && git push origin v1.0.0`.
-4. GitHub Actions runs `scripts/run_tests.sh`, then builds and uploads to PyPI.
+3. `git tag vX.Y.Z && git push origin vX.Y.Z`
+4. GitHub Actions runs tests, then uploads to PyPI.
 
-Requires repo environment **`actions`** with secret **`PYPI_API_TOKEN`**.
+Needs repo environment **`actions`** with secret **`PYPI_API_TOKEN`**.
 
+## License
 
-## Project Organization
-
-Pyre is owned by all its authors and contributors. This is an open source
-project licensed under the LGPLv3. To contribute to Zyre please read the
-[C4.1 process](http://rfc.zeromq.org/spec:22) that we use.
-
-To report an issue, use the [PYRE issue tracker](https://github.com/zeromq/pyre/issues) at github.com.
+LGPLv3 — see `LICENSE` / `AUTHORS`. Upstream issues:
+[zeromq/pyre](https://github.com/zeromq/pyre/issues).

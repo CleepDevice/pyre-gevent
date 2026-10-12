@@ -48,18 +48,10 @@ class PyreNode(object):
         self.peer_groups = {}                       # Groups that our peers are in
         self.own_groups = {}                        # Groups that we are in
         self.headers = {}                           # Our header values
-        # TODO: gossip stuff
-        #self.start()
         self.run()
 
-    # def __del__(self):
-        # destroy beacon
-
     def start(self):
-        # TODO: If application didn't bind explicitly, we grab an ephemeral port
-        # on all available network interfaces. This is orthogonal to
-        # beaconing, since we can connect to other peers and they will
-        # gossip our endpoint to others.
+        # UDP beacon discovery only (gossip / SET ENDPOINT not implemented).
         if self.beacon_port:
             # Start beacon discovery
             self.beacon = ZActor(self._ctx, ZBeacon)
@@ -130,12 +122,9 @@ class PyreNode(object):
 
             self.beacon_socket = self.beacon.resolve()
             self.poller.register(self.beacon_socket, zmq.POLLIN)
-        #else:
-        # TODO: gossip stuff
 
         # Start polling on inbox
         self.poller.register(self.inbox, zmq.POLLIN)
-        #logger.debug("Node identity: {0}".format(self.identity))
 
     def stop(self):
         logger.debug("Pyre node: stopping beacon")
@@ -193,17 +182,6 @@ class PyreNode(object):
             self.beacon_port = int(request.pop(0))
         elif command == "SET INTERVAL":
             self.interval = int(request.pop(0))
-        #elif command == "SET ENDPOINT":
-            # TODO: gossip start and endpoint setting
-        # TODO: GOSSIP BIND, GOSSIP CONNECT
-        #elif command == "BIND":
-        #    # TODO: Needs a wait-signal
-        #    endpoint = request.pop(0).decode('UTF-8')
-        #    self.bind(endpoint)
-        #elif command == "CONNECT":
-        #    # TODO: Needs a wait-signal
-        #    endpoint = request.pop(0).decode('UTF-8')
-        #    self.connect(endpoint)
         elif command == "START":
             # zsock_signal (self->pipe, zyre_node_start (self));
             self.start()
@@ -276,13 +254,6 @@ class PyreNode(object):
             self._pipe.send_pyobj(list(grp.peers.keys()))
         elif command == "ENDPOINT":
             self._pipe.send_unicode(self.endpoint)
-        elif command == "PEER NAME":
-            id = uuid.UUID(bytes=request.pop(0))
-            peer = self.peers.get(id)
-            if peer:
-                self._pipe.send_unicode("%s" %peer.get_name())
-            else:
-                self._pipe.send_unicode("")
         elif command == "PEER ENDPOINT":
             id = uuid.UUID(bytes=request.pop(0))
             peer = self.peers.get(id)
@@ -309,9 +280,6 @@ class PyreNode(object):
             self._pipe.send_pyobj(list(self.peer_groups.keys()))
         elif command == "OWN GROUPS":
             self._pipe.send_pyobj(list(self.own_groups.keys()))
-        elif command == "DUMP":
-            # TODO: zyre_node_dump (self);
-            pass
         elif command == "$TERM":
             # this is often not printed if program terminates
             logger.debug("Pyre node: shutting down")
@@ -535,8 +503,6 @@ class PyreNode(object):
                 logger.warning(self.peers)
                 logger.warning("We don't know peer id {0}".format(peer_id))
 
-    # TODO: Handle gossip dat
-
     # We do this once a second:
     # - if peer has gone quiet, send TCP ping
     # - if peer has disappeared, expire it
@@ -547,9 +513,6 @@ class PyreNode(object):
             self.remove_peer(peer)
         elif time.time() > peer.evasive_at:
             # If peer is being evasive, force a TCP ping.
-            # TODO: do this only once for a peer in this state;
-            # it would be nicer to use a proper state machine
-            # for peer management.
             logger.debug("({0}) peer seems dead/slow name={1} endpoint={2}".format(self.name, peer.get_name(), peer.get_endpoint()))
             msg = ZreMsg(ZreMsg.PING)
             peer.send(msg)

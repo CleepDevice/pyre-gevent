@@ -1,26 +1,14 @@
 import zmq.green as zmq
-import time
-import struct
-import socket
 import uuid
 import logging
-import sys
 
-# local modules
 from . import __version_info__
-from . import zbeacon
 from . import zhelper
 from .zactor import ZActor
-from .zsocket import ZSocket
 from .pyre_node import PyreNode
 from .pyre_event import PyreEvent
 
 logger = logging.getLogger(__name__)
-
-try:
-    raw_input          # Python 2
-except NameError:
-    raw_input = input  # Python 3
 
 
 class Pyre(object):
@@ -54,18 +42,8 @@ class Pyre(object):
             self.actor.send_unicode("SET NAME", zmq.SNDMORE)
             self.actor.send_unicode(self._name)
 
-    #def __del__(self):
-        # We need to explicitly destroy the actor
-        # to make sure our node thread is stopped
-        #self.actor.destroy()
-
     def __bool__(self):
-        "Determine whether the object is valid by converting to boolean" # Python 3
-        return True  #TODO
-
-    def __nonzero__(self):
-        "Determine whether the object is valid by converting to boolean" # Python 2
-        return True  #TODO
+        return self.actor is not None
 
     def uuid(self):
         """Return our node UUID string, after successful initialization"""
@@ -81,12 +59,6 @@ class Pyre(object):
             self.actor.send_unicode("NAME")
             self._name = self.actor.recv().decode('utf-8')
         return self._name
-
-    # Not in Zyre api
-    def set_name(self, name):
-        logger.warning("DEPRECATED: set name in constructor, this method will be removed!")
-        self.actor.send_unicode("SET NAME", zmq.SNDMORE)
-        self.actor.send_unicode(name)
 
     def set_header(self, key, value):
         """Set node header; these are provided to other nodes during discovery
@@ -122,23 +94,6 @@ class Pyre(object):
         """
         self.actor.send_unicode("SET INTERFACE", zmq.SNDMORE)
         self.actor.send_unicode(value)
-
-    # TODO: check args from zyre
-    def set_endpoint(self, format, *args):
-        """By default, Zyre binds to an ephemeral TCP port and broadcasts the local
-        host name using UDP beaconing. When you call this method, Zyre will use
-        gossip discovery instead of UDP beaconing. You MUST set-up the gossip
-        service separately using zyre_gossip_bind() and _connect(). Note that the
-        endpoint MUST be valid for both bind and connect operations. You can use
-        inproc://, ipc://, or tcp:// transports (for tcp://, use an IP address
-        that is meaningful to remote as well as local nodes). Returns 0 if
-        the bind was successful, else -1."""
-        self.actor.send_unicode("SET ENDPOINT", zmq.SNDMORE)
-        self.actor.send_unicode(format)
-
-    # TODO: We haven't implemented gossiping yet
-    #def gossip_bind(self, format, *args):
-    #def gossip_connect(self, format, *args):
 
     def start(self):
         """Start node, after setting header values. When you start a node it
@@ -196,7 +151,6 @@ class Pyre(object):
         else:
             self.actor.send(msg_p)
 
-    # TODO: checks args from zyre
     def whispers(self, peer, format, *args):
         """Send formatted string to a single peer specified as UUID string"""
         self.actor.send_unicode("WHISPER", flags=zmq.SNDMORE)
@@ -237,17 +191,6 @@ class Pyre(object):
         """Iterator that yields `PyreEvent`s indefinitely"""
         while True:
             yield PyreEvent(self)
-
-    # --------------------------------------------------------------------------
-    # Return the name of a connected peer. Caller owns the
-    # string.
-    # DEPRECATED: This is dropped in Zyre api. You receive names through events
-    def get_peer_name(self, peer):
-        logger.warning("get_peer_name() is deprecated, will be removed")
-        self.actor.send_unicode("PEER NAME", zmq.SNDMORE)
-        self.actor.send(peer.bytes)
-        name = self.actor.recv_unicode()
-        return name
 
     def peer_address(self, peer):
         """Return the endpoint of a connected peer."""
@@ -331,7 +274,7 @@ if __name__ == '__main__':
     chat_pipe = zhelper.zthread_fork(ctx, chat_task)
     while True:
         try:
-            msg = raw_input()
+            msg = input()
             chat_pipe.send_string(msg)
         except (KeyboardInterrupt, SystemExit):
             chat_pipe.send_string('$TERM')

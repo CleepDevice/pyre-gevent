@@ -14,13 +14,16 @@ _pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "pyre_gevent")]
 sys.modules.setdefault("pyre_gevent", _pkg)
 sys.modules.setdefault("pyre_gevent.zactor", MagicMock())
 
-# Minimal netaddr stub (private IPv4 check)
+# Minimal netaddr 1.x stub (private IPv4 check)
 class _IPAddress(object):
     def __init__(self, addr):
         self.addr = str(addr)
 
-    def is_private(self):
+    def is_ipv4_private_use(self):
         return self.addr.startswith(("10.", "192.168.", "172.16.", "172.17.", "127."))
+
+    def is_ipv6_unique_local(self):
+        return False
 
     def __str__(self):
         return self.addr
@@ -28,7 +31,7 @@ class _IPAddress(object):
 
 _netaddr = MagicMock()
 _netaddr.IPAddress = _IPAddress
-_netaddr.__version__ = "0.8.0"
+_netaddr.__version__ = "1.3.0"
 sys.modules["netaddr"] = _netaddr
 sys.modules["netifaces"] = MagicMock()
 

@@ -23,6 +23,10 @@ devices and modernizes packaging / CI.
   `netifaces-plus>=0.12.0`
 - Publish to PyPI via GitHub Actions on `v*` tags (replace Travis + local
   publish scripts); unit tests must pass before upload
+- Drop netaddr 0.x compatibility branch (require 1.x private-IP API only)
+- Remove deprecated / unimplemented public API: `get_peer_name`, `set_name`,
+  `set_endpoint`, gossip stubs; drop obsolete Vagrant + Sphinx docs (README is
+  the doc of record)
 
 ### Added
 - Unit tests for beacon send resilience and interface selection
