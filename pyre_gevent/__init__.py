@@ -1,7 +1,7 @@
 import re
 
 __all__ = ["pyre", "zbeacon", "zhelper"]
-__version__ = "0.3.6"
+__version__ = "1.0.0"
 __version_info__ = tuple(int(v) for v in re.sub("[a-zA-Z]", "", __version__).split("."))
 
 from .pyre import Pyre
