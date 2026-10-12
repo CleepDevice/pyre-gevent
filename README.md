@@ -211,6 +211,14 @@ Python **3.9+**. Runtime dependencies are declared once in `setup.py` (`install_
 
 Install with `pip install .` (or from the published package). `ipaddress` is in the standard library.
 
+## Release (PyPI)
+
+1. Bump `version` in `setup.py`.
+2. Commit, then tag and push: `git tag v0.3.6 && git push origin v0.3.6`.
+3. GitHub Actions (`.github/workflows/python-publish.yml`) builds and uploads to PyPI.
+
+Requires repo environment **`actions`** with secret **`PYPI_API_TOKEN`**.
+
 
 ## Project Organization
 
