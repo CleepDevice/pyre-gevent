@@ -212,12 +212,21 @@ Python **3.9+**. Runtime dependencies are declared once in `setup.py` (`install_
 
 Install with `pip install .` (or from the published package). `ipaddress` is in the standard library.
 
+## Tests
+
+```sh
+pip install .
+sh scripts/run_tests.sh
+```
+
+Each module runs in its own process (avoids gevent/zmq.green teardown crashes).
+
 ## Release (PyPI)
 
 1. Bump `version` in `setup.py` and `pyre_gevent/__init__.py` (keep in sync).
 2. Update `CHANGELOG.md`.
 3. Commit, then tag and push: `git tag v1.0.0 && git push origin v1.0.0`.
-4. GitHub Actions (`.github/workflows/python-publish.yml`) builds and uploads to PyPI.
+4. GitHub Actions runs `scripts/run_tests.sh`, then builds and uploads to PyPI.
 
 Requires repo environment **`actions`** with secret **`PYPI_API_TOKEN`**.
 

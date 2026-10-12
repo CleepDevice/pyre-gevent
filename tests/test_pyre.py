@@ -14,21 +14,53 @@ if sys.version.startswith('3'):
 
 class PyreTest(unittest.TestCase):
     def setUp(self, *args, **kwargs):
-        ctx = zmq.Context()
-        self.node1 = pyre.Pyre("node1", ctx=ctx)
+        self.ctx = zmq.Context()
+        self.node1 = pyre.Pyre("node1", ctx=self.ctx)
         self.node1.set_header("X-TEST", "1")
-        self.node2 = pyre.Pyre("node2", ctx=ctx)
+        self.node2 = pyre.Pyre("node2", ctx=self.ctx)
         self.node2.set_header("X-TEST", "1")
         self.node1.start()
         self.node2.start()
-        # give time for nodes to exchange
-        time.sleep(1)
+        # Wait until peers see each other, then drain ENTER so later asserts
+        # are not racing leftover discovery events.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if self.node1.peers() and self.node2.peers():
+                break
+            time.sleep(0.05)
+        self.assertTrue(self.node1.peers(), "node1 did not discover node2")
+        self.assertTrue(self.node2.peers(), "node2 did not discover node1")
+        self._drain(self.node1)
+        self._drain(self.node2)
     # end setUp
 
     def tearDown(self):
         self.node1.stop()
         self.node2.stop()
     # end tearDown
+
+    def _drain(self, node, timeout=0.5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if node.socket().getsockopt(zmq.EVENTS) & zmq.POLLIN:
+                node.recv()
+            else:
+                time.sleep(0.02)
+
+    def _recv_type(self, node, expected, timeout=5.0):
+        """Receive until a message of the expected type (skip earlier events)."""
+        if not isinstance(expected, (list, tuple, set)):
+            expected = (expected,)
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            if node.socket().getsockopt(zmq.EVENTS) & zmq.POLLIN:
+                last = node.recv()
+                if last[0] in expected:
+                    return last
+                continue
+            time.sleep(0.05)
+        self.fail("timeout waiting for %r (last=%r)" % (expected, last))
 
     def test_get_name(self):
         self.assertEqual("node1", self.node1.name())
@@ -83,22 +115,14 @@ class PyreTest(unittest.TestCase):
     # end test_get_own_groups
 
     def test_join_leave_msg(self):
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'ENTER')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'ENTER')
         self.node1.join("TEST")
         self.node2.join("TEST")
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'JOIN')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'JOIN')
+        self.assertEqual(self._recv_type(self.node1, b"JOIN")[0], b"JOIN")
+        self.assertEqual(self._recv_type(self.node2, b"JOIN")[0], b"JOIN")
         self.node1.leave("TEST")
         self.node2.leave("TEST")
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'LEAVE')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'LEAVE')
+        self.assertEqual(self._recv_type(self.node1, b"LEAVE")[0], b"LEAVE")
+        self.assertEqual(self._recv_type(self.node2, b"LEAVE")[0], b"LEAVE")
 
     def test_get_peer_groups(self):
         self.node1.join("TEST")
@@ -112,30 +136,20 @@ class PyreTest(unittest.TestCase):
     # end test_get_peer_groups
 
     def test_whispers(self):
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'ENTER')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'ENTER')
         self.node1.whispers(self.node2.uuid(), "Hi")
-        msg = self.node2.recv()
+        msg = self._recv_type(self.node2, b"WHISPER")
         self.assertEqual(b"WHISPER", msg[0])
         self.assertEqual(self.node1.uuid().bytes, msg[1])
         self.assertEqual(b"node1", msg[2])
         self.assertEqual(b"Hi", msg[3])
 
     def test_shouts(self):
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'ENTER')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'ENTER')
         self.node1.join("TEST")
         self.node2.join("TEST")
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'JOIN')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'JOIN')
+        self._recv_type(self.node1, b"JOIN")
+        self._recv_type(self.node2, b"JOIN")
         self.node1.shouts("TEST", "Hi")
-        msg = self.node2.recv()
+        msg = self._recv_type(self.node2, b"SHOUT")
         self.assertEqual(b"SHOUT", msg[0])
         self.assertEqual(self.node1.uuid().bytes, msg[1])
         self.assertEqual(b"node1", msg[2])
@@ -143,18 +157,12 @@ class PyreTest(unittest.TestCase):
         self.assertEqual(b"Hi", msg[4])
 
     def test_shout(self):
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'ENTER')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'ENTER')
         self.node1.join("TEST")
         self.node2.join("TEST")
-        msg = self.node1.recv()
-        self.assertEqual(msg[0], b'JOIN')
-        msg = self.node2.recv()
-        self.assertEqual(msg[0], b'JOIN')
+        self._recv_type(self.node1, b"JOIN")
+        self._recv_type(self.node2, b"JOIN")
         self.node1.shout("TEST", b"Hi")
-        msg = self.node2.recv()
+        msg = self._recv_type(self.node2, b"SHOUT")
         self.assertEqual(b"SHOUT", msg[0])
         self.assertEqual(self.node1.uuid().bytes, msg[1])
         self.assertEqual(b"node1", msg[2])

@@ -22,7 +22,8 @@ devices and modernizes packaging / CI.
 - Raise dependency floors: `gevent>=22.10.2`, `pyzmq>=22.3.0`, `netaddr>=1.0.0`,
   `netifaces-plus>=0.12.0`
 - Publish to PyPI via GitHub Actions on `v*` tags (replace Travis + local
-  publish scripts)
+  publish scripts); unit tests must pass before upload
 
 ### Added
 - Unit tests for beacon send resilience and interface selection
+- `scripts/run_tests.sh` (per-module processes) run by the publish workflow before upload

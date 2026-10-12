@@ -1,5 +1,6 @@
 # Publish pyre-gevent to PyPI (sdist + wheel).
 # Trigger: push a tag vX.Y.Z (must match setup.py version).
+# Unit tests must pass before upload.
 
 name: Publish to PyPI
 
@@ -13,7 +14,28 @@ permissions:
     contents: read
 
 jobs:
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Python 3.9
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.9"
+
+            - name: Install package (with runtime deps)
+              run: |
+                  python -m pip install --upgrade pip
+                  python -m pip install .
+
+            - name: Run unit tests
+              # Per-module processes: gevent/zmq.green leave process-global state
+              # that can segfault a single long `unittest discover` run.
+              run: sh scripts/run_tests.sh
+
     publish:
+        needs: [test]
         runs-on: ubuntu-latest
         # Required so PYPI_API_TOKEN is loaded (environment secret, not repo secret).
         environment: actions
@@ -32,6 +54,14 @@ jobs:
                   SETUP_VER="$(python -c "import re; print(re.search(r'version=[\"\\']([^\"\\']+)[\"\\']', open('setup.py').read()).group(1))")"
                   echo "tag=$TAG setup.py=$SETUP_VER"
                   test "$TAG" = "$SETUP_VER"
+
+            - name: Check tag matches package __version__
+              if: startsWith(github.ref, 'refs/tags/')
+              run: |
+                  TAG="${GITHUB_REF_NAME#v}"
+                  PKG_VER="$(python -c "import re; print(re.search(r'__version__\s*=\s*[\"\\']([^\"\\']+)[\"\\']', open('pyre_gevent/__init__.py').read()).group(1))")"
+                  echo "tag=$TAG __version__=$PKG_VER"
+                  test "$TAG" = "$PKG_VER"
 
             - name: Install build tools
               run: python -m pip install --upgrade pip build twine
