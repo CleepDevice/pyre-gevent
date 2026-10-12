@@ -24,6 +24,7 @@ class ZBeaconSendTest(unittest.TestCase):
         beacon.broadcast_address = "192.168.1.255"
         beacon.port_nbr = 5670
         beacon.terminated = False
+        beacon.udp_ready = True
         return beacon
 
     def test_transient_errnos_include_portable_values(self):

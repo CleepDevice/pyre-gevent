@@ -54,6 +54,23 @@ _TRANSIENT_SEND_ERRNOS = {
 
 AF_INET = 2
 AF_PACKET = 17
+# Skip typical container/VM virtual NICs when falling back without a gateway match
+_VIRTUAL_IFACE_PREFIXES = (
+    "docker",
+    "br-",
+    "veth",
+    "virbr",
+    "tun",
+    "tap",
+    "wg",
+    "vnet",
+    "vmnet",
+    "zt",
+    "lxc",
+    "cni",
+    "flannel",
+    "cbr",
+)
 
 class ZBeacon(object):
 
@@ -73,6 +90,7 @@ class ZBeacon(object):
         self.terminated = False  #  Did caller ask us to quit?
         self.verbose = False  #  Verbose logging enabled?
         self.hostname = ""  #  Saved host name
+        self.udp_ready = False  # True only after successful UDP bind
 
         self.address = None
         self.mac = None
@@ -86,11 +104,23 @@ class ZBeacon(object):
             self.udpsock.close()
 
     def prepare_udp(self, interface_name=None):
+        """
+        Resolve interface and bind the UDP socket.
+
+        Returns:
+            bool: True if the beacon socket is ready to send/receive.
+        """
+        self.udp_ready = False
         try:
             self._prepare_socket(interface_name)
         except ValueError:
             logger.exception("Error preparing socket:")
-            return
+            return False
+
+        if self.broadcast_address is None:
+            logger.error("No broadcast address resolved; UDP beacon not ready")
+            return False
+
         try:
             self.udpsock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             self.udpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -156,9 +186,28 @@ class ZBeacon(object):
                     self.__class__.__name__
                 )
             )
+            return False
+
+        # Loopback-only setup is not usable for LAN discovery
+        if str(self.address) == "127.0.0.1":
+            logger.warning(
+                "Beacon resolved to 127.0.0.1 only; not ready for LAN discovery"
+            )
+            self.udp_ready = False
+            return False
+
+        self.udp_ready = True
+        return True
+
+    @staticmethod
+    def _is_virtual_iface(name):
+        lname = name.lower()
+        return any(lname.startswith(prefix) for prefix in _VIRTUAL_IFACE_PREFIXES)
 
     def __fill_gateways(self, netinf):
-        default_interface_names = []
+        # Default-route interfaces first, then other gateway interfaces.
+        default_route_names = []
+        other_gateway_names = []
         netifaces_default_interface_names = []
         gateways = netifaces.gateways()
         logger.debug("Gateways: {0}".format(gateways))
@@ -166,25 +215,34 @@ class ZBeacon(object):
         if AF_INET in gateways:
             for address, interface, is_default in gateways[AF_INET]:
                 # fix for windows (netifaces.gateway() returns adapter name instead of interface name)
+                resolved_names = []
                 if platform.startswith("win"):
                     netifaces_default_interface_names.append(interface)
                     for iface in netinf:
                         for name, data in iface.items():
                             if AF_INET in data and data[AF_INET]["adapter"] == interface:
-                                default_interface_names.append(name)
+                                resolved_names.append(name)
                 else:
-                    default_interface_names.append(interface)
+                    resolved_names.append(interface)
+
+                target = default_route_names if is_default else other_gateway_names
+                for name in resolved_names:
+                    if name not in default_route_names and name not in other_gateway_names:
+                        target.append(name)
 
             logger.debug(
-                "Default interface names '{0}'".format(list(default_interface_names))
+                "Default-route interface names '{0}'".format(list(default_route_names))
+            )
+            logger.debug(
+                "Other gateway interface names '{0}'".format(list(other_gateway_names))
             )
             logger.debug(
                 "Netifaces default interface names '{0}'".format(
                     list(netifaces_default_interface_names)
                 )
             )
-    
-        return default_interface_names, netifaces_default_interface_names
+
+        return default_route_names + other_gateway_names, netifaces_default_interface_names
 
     def __search_mac_addr(self, adapter):
         """
@@ -211,128 +269,156 @@ class ZBeacon(object):
             logger.debug("Error getting data for adapter '%s'", adapter)
         return None
 
+    def _parse_usable_iface(self, name, data):
+        """
+        Validate an interface and return addressing info, or None if unusable.
+        """
+        data_2 = data.get(AF_INET)
+        if not data_2:
+            logger.debug(" - No data_2 found for interface '{0}'.".format(name))
+            return None
+
+        logger.debug(" + data_2: %s | %s | %s", data_2, data_2.get(AF_INET), data_2.keys())
+
+        data_17 = data.get(AF_PACKET)
+        if not data_17 and platform.startswith("win") and data_2.get("adapter"):
+            # last chance to get mac address on windows platform
+            adapter = data_2.get("adapter")
+            mac_addr = self.__search_mac_addr(adapter)
+            if mac_addr:
+                data_17 = {"addr": mac_addr}
+        if not data_17:
+            logger.debug(" - No data_17 found for interface '{0}'.".format(name))
+            return None
+
+        address_str = data_2.get("addr")
+        netmask_str = data_2.get("netmask")
+        mac_str = data_17.get("addr")
+
+        if not address_str or not netmask_str:
+            logger.debug(
+                " - Address or netmask not found for interface '{0}'.".format(name)
+            )
+            return None
+
+        if isinstance(address_str, bytes):
+            address_str = address_str.decode("utf8")
+
+        if isinstance(netmask_str, bytes):
+            netmask_str = netmask_str.decode("utf8")
+
+        if isinstance(mac_str, bytes):
+            mac_str = mac_str.decode("utf8")
+
+        # keep only private interface
+        ip_address = netaddr.IPAddress(address_str)
+        # handle netaddr breaking changes
+        if netaddr.__version__.startswith("0."):
+            # is_private does not exist anymore on new IpAddress lib version
+            # pylint: disable=no-member
+            ip_is_private = ip_address.is_private()
+        else:
+            ip_is_private = (
+                ip_address.is_ipv4_private_use()
+                or ip_address.is_ipv6_unique_local()
+            )
+        if ip_address and not ip_is_private:
+            logger.debug(
+                " - Interface '{0}' refers to public ip address, drop it.".format(name)
+            )
+            return None
+
+        interface_string = "{0}/{1}".format(address_str, netmask_str)
+        interface = ipaddress.ip_interface(interface_string)
+        if interface.is_loopback:
+            logger.debug(" - Interface {0} is a loopback device.".format(name))
+            return None
+
+        if interface.is_link_local:
+            logger.debug(" - Interface {0} is a link-local device.".format(name))
+            return None
+
+        return {
+            "address": ip_address,
+            "mac": mac_str,
+            "network_address": interface.network.network_address,
+            "broadcast_address": interface.network.broadcast_address,
+            "interface_name": name,
+        }
+
     def _prepare_socket(self, interface_name=None):
         netinf = zhelper.get_ifaddrs()
         logger.debug("Available interfaces: {0}".format(netinf))
 
-        # get gateways names (used to select the connected interface)
-        (default_interface_names, netifaces_default_interface_names) = self.__fill_gateways(netinf)
+        # Prefer default-route / gateway interfaces, then any private LAN NIC.
+        (gateway_interface_names, _netifaces_names) = self.__fill_gateways(netinf)
+
+        gateway_candidates = []
+        other_candidates = []
 
         for iface in netinf:
-            # Loop over the interfaces and their settings to try to find the broadcast address.
             # ipv4 only currently and needs a valid broadcast address
             for name, data in iface.items():
                 logger.debug("------------------")
                 logger.debug("Checking interface '{0}'".format(name))
                 logger.debug("Data: %s", data)
-                # Drop if not configured interface name
                 if interface_name and interface_name != name:
                     logger.debug(
-                        " - Interface '{0}' is not specified one '{1}'".format(name, interface_name)
-                    )
-                    continue
-
-                # Interface of default route found, skip other ones
-                # This trick allows to skip invalid interfaces like docker ones.
-                if (
-                    len(default_interface_names) > 0
-                    and name not in default_interface_names
-                ):
-                    logger.debug(
-                        " - Interface '{0}' is not interface of default route".format(name)
-                    )
-                    continue
-
-                logger.debug("Checking out interface '{0}'.".format(name))
-
-                # Get addr and netmask infos
-                data_2 = data.get(AF_INET)
-                if not data_2:
-                    logger.debug(" - No data_2 found for interface '{0}'.".format(name))
-                    continue
-                else:
-                    logger.debug(" + data_2: %s | %s | %s", data_2, data_2.get(AF_INET), data_2.keys())
-
-                # get mac address infos
-                data_17 = data.get(AF_PACKET)
-                if not data_17 and platform.startswith("win") and data_2.get("adapter"):
-                    # last chance to get mac address on windows platform
-                    adapter = data_2.get("adapter")
-                    mac_addr = self.__search_mac_addr(adapter)
-                    if mac_addr:
-                        data_17 = {
-                            "addr": mac_addr
-                        }
-                if not data_17:
-                    logger.debug(" - No data_17 found for interface '{0}'.".format(name))
-                    continue
-
-                address_str = data_2.get("addr")
-                netmask_str = data_2.get("netmask")
-                mac_str = data_17.get("addr")
-
-                if not address_str or not netmask_str:
-                    logger.debug(
-                        " - Address or netmask not found for interface '{0}'.".format(name)
-                    )
-                    continue
-
-                if isinstance(address_str, bytes):
-                    address_str = address_str.decode("utf8")
-
-                if isinstance(netmask_str, bytes):
-                    netmask_str = netmask_str.decode("utf8")
-
-                if isinstance(mac_str, bytes):
-                    mac_str = mac_str.decode("utf8")
-
-                # keep only private interface
-                ip_address = netaddr.IPAddress(address_str)
-                # handle netaddr breaking changes
-                if netaddr.__version__.startswith("0."):
-                    # is_private does not exist anymore on new IpAddress lib version
-                    # pylint: disable=no-member
-                    ip_is_private = ip_address.is_private()
-                else:
-                    ip_is_private = (
-                        ip_address.is_ipv4_private_use()
-                        or ip_address.is_ipv6_unique_local()
-                    )
-                if ip_address and not ip_is_private:
-                    logger.debug(
-                        " - Interface '{0}' refers to public ip address, drop it.".format(
-                            name
+                        " - Interface '{0}' is not specified one '{1}'".format(
+                            name, interface_name
                         )
                     )
                     continue
 
-                interface_string = "{0}/{1}".format(address_str, netmask_str)
-
-                interface = ipaddress.ip_interface(interface_string)
-                if interface.is_loopback:
-                    logger.debug(" - Interface {0} is a loopback device.".format(name))
+                # Auto-selection skips virtual NICs; explicit interface_name wins
+                if not interface_name and self._is_virtual_iface(name):
+                    logger.debug(
+                        " - Interface '{0}' looks virtual, skip for beacon".format(name)
+                    )
                     continue
 
-                if interface.is_link_local:
-                    logger.debug(" - Interface {0} is a link-local device.".format(name))
+                info = self._parse_usable_iface(name, data)
+                if not info:
                     continue
 
-                self.address = ip_address
-                self.mac = mac_str
-                self.network_address = interface.network.network_address
-                self.broadcast_address = interface.network.broadcast_address
-                self.interface_name = name
-
-                if self.address:
-                    break
-
-            if self.address:
-                break
+                if name in gateway_interface_names:
+                    priority = gateway_interface_names.index(name)
+                    gateway_candidates.append((priority, info))
+                else:
+                    other_candidates.append(info)
 
         logger.debug("Finished scanning interfaces.")
 
-        if not self.address:
-            logger.debug("IP address not found during scan, fallback to looback address")
+        selected = None
+        if gateway_candidates:
+            gateway_candidates.sort(key=lambda item: item[0])
+            selected = gateway_candidates[0][1]
+            logger.debug(
+                "Selected gateway interface '{0}'".format(selected["interface_name"])
+            )
+        elif other_candidates:
+            # No gateway match yet (boot / flap): use first private LAN iface
+            selected = other_candidates[0]
+            logger.warning(
+                "No default-route interface for beacon; using '%s' (%s)",
+                selected["interface_name"],
+                selected["address"],
+            )
+
+        if selected:
+            self.address = selected["address"]
+            self.mac = selected["mac"]
+            self.network_address = selected["network_address"]
+            self.broadcast_address = selected["broadcast_address"]
+            self.interface_name = selected["interface_name"]
+        else:
+            # Last resort: loopback + multicast. Upper layers should treat
+            # 127.0.0.1 as "not ready for LAN discovery" and retry.
+            logger.warning(
+                "No usable LAN interface found for ZRE beacon; falling back to "
+                "127.0.0.1 (discovery will not work on the LAN until a network "
+                "is available)"
+            )
             self.network_address = ipaddress.IPv4Address(u("127.0.0.1"))
             self.broadcast_address = ipaddress.IPv4Address(u(MULTICAST_GRP))
             self.interface_name = "loopback"
@@ -347,8 +433,20 @@ class ZBeacon(object):
 
     def configure(self, interface_name, port_nbr):
         self.port_nbr = port_nbr
-        self.prepare_udp(interface_name)
-        self.pipe.send_unicode(str(self.address))
+        ok = self.prepare_udp(interface_name)
+        if not ok:
+            logger.error(
+                "UDP beacon setup failed on %s; terminating beacon actor",
+                self.address,
+            )
+            # Force an unusable address so PyreNode aborts start cleanly
+            # instead of half-running with a dead UDP socket.
+            self.address = u("127.0.0.1")
+            self.terminated = True
+        # Always answer CONFIGURE so the node API does not block.
+        self.pipe.send_unicode(
+            str(self.address) if self.address is not None else "127.0.0.1"
+        )
 
     def handle_pipe(self):
         #  Get just the commands off the pipe
@@ -392,6 +490,8 @@ class ZBeacon(object):
             logger.error("zbeacon: - invalid command: {0}".format(command))
 
     def handle_udp(self):
+        if not self.udp_ready:
+            return
         try:
             frame, addr = self.udpsock.recvfrom(BEACON_MAX)
 
@@ -420,6 +520,8 @@ class ZBeacon(object):
             self.pipe.send(frame)
 
     def send_beacon(self):
+        if not self.udp_ready or not self.transmit:
+            return
         try:
             self.udpsock.sendto(
                 self.transmit, (str(self.broadcast_address), self.port_nbr)
@@ -454,7 +556,7 @@ class ZBeacon(object):
 
         while not self.terminated:
             timeout = 1
-            if self.transmit:
+            if self.transmit and self.udp_ready:
                 timeout = self.ping_at - time.time()
                 if timeout < 0:
                     timeout = 0
@@ -463,12 +565,13 @@ class ZBeacon(object):
             if self.pipe in items and items[self.pipe] == zmq.POLLIN:
                 self.handle_pipe()
             if (
-                self.udpsock.fileno() in items
+                self.udp_ready
+                and self.udpsock.fileno() in items
                 and items[self.udpsock.fileno()] == zmq.POLLIN
             ):
                 self.handle_udp()
 
-            if self.transmit and time.time() >= self.ping_at:
+            if self.transmit and self.udp_ready and time.time() >= self.ping_at:
                 self.send_beacon()
                 self.ping_at = time.time() + self.interval
 

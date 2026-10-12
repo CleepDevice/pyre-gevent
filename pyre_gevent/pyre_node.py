@@ -86,17 +86,11 @@ class PyreNode(object):
             #if self.interval:
             #   self.beacon.set_interval(self.interval)
 
-            # Our hostname is provided by zbeacon
-            self.port = self.inbox.bind_to_random_port("tcp://*")
-            if self.port < 0:
-                # Do not sys.exit: this library runs inside a long-lived process
-                # (e.g. Cleep). Tear down the half-started beacon and notify the
-                # application so it can retry discovery.
-                logger.critical(
-                    "Random port assignment for incoming messages failed"
-                )
+            def _abort_start(reason):
+                logger.critical("%s", reason)
                 try:
-                    self.beacon.destroy()
+                    if self.beacon:
+                        self.beacon.destroy()
                 except Exception:
                     pass
                 self.beacon = None
@@ -105,6 +99,24 @@ class PyreNode(object):
                     self.outbox.send_unicode("$TERM")
                 except Exception:
                     pass
+
+            # Loopback means no usable LAN iface yet — do not pretend discovery works
+            if not hostname or hostname in ("127.0.0.1", "None"):
+                _abort_start(
+                    "Beacon resolved unusable address %r; discovery not started"
+                    % (hostname,)
+                )
+                return
+
+            # Our hostname is provided by zbeacon
+            self.port = self.inbox.bind_to_random_port("tcp://*")
+            if self.port < 0:
+                # Do not sys.exit: this library runs inside a long-lived process
+                # (e.g. Cleep). Tear down the half-started beacon and notify the
+                # application so it can retry discovery.
+                _abort_start(
+                    "Random port assignment for incoming messages failed"
+                )
                 return
             self.bound = True
             self.endpoint = "tcp://%s:%d" %(hostname, self.port)
