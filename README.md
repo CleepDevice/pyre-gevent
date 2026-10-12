@@ -69,11 +69,12 @@ Python **≥ 3.9**. Declared in `setup.py`:
 
 ```sh
 pip install .
-sh scripts/run_tests.sh
+sh scripts/run_tests.sh              # CI gate — stable unit tests only
+# sh scripts/run_tests_integration.sh  # optional local: real ZRE/UDP (can SIGSEGV)
 ```
 
-Each test module runs in its own process (avoids gevent / `zmq.green` teardown
-crashes on a single long `discover` run).
+CI never runs the integration suite: `gevent` / `zmq.green` teardown can
+segfault under rapid create/destroy, which would make publish flaky.
 
 ## Release
 

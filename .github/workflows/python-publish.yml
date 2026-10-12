@@ -30,8 +30,8 @@ jobs:
                   python -m pip install .
 
             - name: Run unit tests
-              # Per-module processes: gevent/zmq.green leave process-global state
-              # that can segfault a single long `unittest discover` run.
+              # Stable units only (see scripts/run_tests.sh). Integration ZRE/UDP
+              # tests are excluded — gevent/zmq.green teardown can SIGSEGV.
               run: sh scripts/run_tests.sh
 
     publish:

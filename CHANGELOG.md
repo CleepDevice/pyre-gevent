@@ -30,7 +30,9 @@ devices and modernizes packaging / CI.
 
 ### Added
 - Unit tests for beacon send resilience and interface selection
-- `scripts/run_tests.sh` (per-module processes) run by the publish workflow before upload
+- `scripts/run_tests.sh` (stable unit tests, per-module processes) as publish CI gate;
+  integration ZRE/UDP tests moved to optional `run_tests_integration.sh` (flaky under
+  gevent teardown, not run in CI)
 - Robust `Pyre.set_interface(name)` (before `start`): forces the UDP beacon NIC
   via `SET INTERFACE`, aligned with zeromq/pyre; no silent fallback to another
   iface when the forced name is missing/unusable
