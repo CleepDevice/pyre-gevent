@@ -289,35 +289,54 @@ class PyreNode(object):
             logger.warning("Unkown Node API command: {0}".format(command))
 
     def purge_peer(self, peer, endpoint):
-        if peer.get_endpoint() == endpoint:
+        if peer.get_endpoint() == endpoint or peer.get_last_endpoint() == endpoint:
             self.remove_peer(peer)
-            peer.disconnect()
-            logger.debug("Purge peer: {0}{1}".format(peer,endpoint))
+            logger.debug("Purge peer: {0}{1}".format(peer, endpoint))
+
+    def _send_hello(self, peer):
+        m = ZreMsg(ZreMsg.HELLO)
+        m.set_endpoint(self.endpoint)
+        m.set_groups(self.own_groups.keys())
+        m.set_status(self.status)
+        m.set_name(self.name)
+        m.set_headers(self.headers)
+        peer.send(m)
 
     # Find or create peer via its UUID string
     def require_peer(self, identity, endpoint):
         p = self.peers.get(identity)
-        if not p:
-            # Purge any previous peer on same endpoint
-            for peer_id, peer in self.peers.copy().items():
-                self.purge_peer(peer, endpoint)
+        if p:
+            # Mailbox may have been dropped on send failure while UDP beacons still
+            # refresh timers — reopen and re-handshake (aligned with pyre-ts).
+            endpoint_changed = bool(
+                endpoint and p.endpoint and p.endpoint != endpoint
+            )
+            if not p.connected or endpoint_changed:
+                logger.debug(
+                    "({0}) reconnect peer name={1} endpoint={2}{3}".format(
+                        self.name,
+                        p.get_name(),
+                        endpoint,
+                        " (endpoint changed)" if endpoint_changed else "",
+                    )
+                )
+                if p.connected:
+                    p.disconnect()
+                p.connect(self.identity, endpoint)
+                self._send_hello(p)
+            return p
 
-            p = PyrePeer(self._ctx, identity)
-            self.peers[identity] = p
-            p.set_origin(self.name);
-            # TODO: this could be handy, to set verbosity on a specific peer
-            #zyre_peer_set_verbose (peer, self->verbose);
-            p.connect(self.identity, endpoint)
+        # Purge any previous peer on same endpoint
+        for peer_id, peer in self.peers.copy().items():
+            self.purge_peer(peer, endpoint)
 
-            # Handshake discovery by sending HELLO as first message
-            m = ZreMsg(ZreMsg.HELLO)
-            m.set_endpoint(self.endpoint)
-            m.set_groups(self.own_groups.keys())
-            m.set_status(self.status)
-            m.set_name(self.name)
-            m.set_headers(self.headers)
-            p.send(m)
-
+        p = PyrePeer(self._ctx, identity)
+        self.peers[identity] = p
+        p.set_origin(self.name)
+        # TODO: this could be handy, to set verbosity on a specific peer
+        #zyre_peer_set_verbose (peer, self->verbose);
+        p.connect(self.identity, endpoint)
+        self._send_hello(p)
         return p
 
     #  Remove peer from group, if it's a member
@@ -330,12 +349,17 @@ class PyreNode(object):
         self.outbox.send_unicode("EXIT", zmq.SNDMORE)
         self.outbox.send(peer.get_identity().bytes, zmq.SNDMORE)
         self.outbox.send_unicode(peer.get_name())
-        logger.debug("({0}) EXIT name={1}".format(peer, peer.get_endpoint()))
+        logger.debug(
+            "({0}) EXIT name={1}".format(
+                self.name, peer.get_endpoint() or peer.get_last_endpoint()
+            )
+        )
         # Remove peer from any groups we've got it in
         for grp in self.peer_groups.values():
             self.delete_peer(peer, grp)
         # To destroy peer, we remove from peers hash table (dict)
-        self.peers.pop(peer.get_identity())
+        self.peers.pop(peer.get_identity(), None)
+        peer.disconnect()
 
     # Find or create group via its name
     def require_peer_group(self, groupname):
@@ -444,11 +468,23 @@ class PyreNode(object):
             peer.send(ZreMsg(id=ZreMsg.PING_OK))
         elif zmsg.id == ZreMsg.JOIN:
             self.join_peer_group(peer, zmsg.get_group())
-            assert(zmsg.get_status() == peer.get_status())
+            if zmsg.get_status() != peer.get_status():
+                logger.warning(
+                    "({0}) JOIN status mismatch from {1}: wire={2} local={3}".format(
+                        self.name, peer.get_name(), zmsg.get_status(), peer.get_status()
+                    )
+                )
+                peer.set_status(zmsg.get_status())
         elif zmsg.id == ZreMsg.LEAVE:
             #self.leave_peer_group(zmsg.get_group())
             self.leave_peer_group(peer, zmsg.get_group())
-            assert(zmsg.get_status() == peer.get_status())
+            if zmsg.get_status() != peer.get_status():
+                logger.warning(
+                    "({0}) LEAVE status mismatch from {1}: wire={2} local={3}".format(
+                        self.name, peer.get_name(), zmsg.get_status(), peer.get_status()
+                    )
+                )
+                peer.set_status(zmsg.get_status())
         # Activity from peer resets peer timers
         peer.refresh()
 
@@ -489,7 +525,8 @@ class PyreNode(object):
         if port:
             endpoint = "tcp://%s:%d" %(ipaddress.decode('UTF-8'), port)
             peer = self.require_peer(peer_id, endpoint)
-            peer.refresh()
+            # Presence only — leave evasive_at alone so TCP PING still runs on a dead mailbox.
+            peer.refresh_expiry()
         else:
             # Zero port means peer is going away; remove it if
             # we had any knowledge of it already
@@ -508,14 +545,32 @@ class PyreNode(object):
     # - if peer has disappeared, expire it
     def ping_peer(self, peer_id):
         peer = self.peers.get(peer_id)
-        if time.time() > peer.expired_at:
-            logger.debug("({0}) peer expired name={1} endpoint={2}".format(self.name, peer.get_name(), peer.get_endpoint()))
+        now = time.monotonic()
+        if now > peer.expired_at:
+            logger.debug(
+                "({0}) peer expired name={1} endpoint={2}".format(
+                    self.name,
+                    peer.get_name(),
+                    peer.get_endpoint() or peer.get_last_endpoint(),
+                )
+            )
             self.remove_peer(peer)
-        elif time.time() > peer.evasive_at:
-            # If peer is being evasive, force a TCP ping.
-            logger.debug("({0}) peer seems dead/slow name={1} endpoint={2}".format(self.name, peer.get_name(), peer.get_endpoint()))
-            msg = ZreMsg(ZreMsg.PING)
-            peer.send(msg)
+        elif now > peer.evasive_at:
+            # If peer is being evasive, force a TCP ping — or reopen mailbox first.
+            logger.debug(
+                "({0}) peer seems dead/slow name={1} endpoint={2}".format(
+                    self.name,
+                    peer.get_name(),
+                    peer.get_endpoint() or peer.get_last_endpoint(),
+                )
+            )
+            endpoint = peer.get_endpoint() or peer.get_last_endpoint()
+            if not peer.connected and endpoint:
+                peer.connect(self.identity, endpoint)
+                self._send_hello(peer)
+            else:
+                msg = ZreMsg(ZreMsg.PING)
+                peer.send(msg)
 
     # --------------------------------------------------------------------------
     # This is the actor that runs a single node; it uses one thread, creates
@@ -524,9 +579,9 @@ class PyreNode(object):
 
         # Signal actor successfully initialized
         self._pipe.signal()
-        reap_at = time.time() + REAP_INTERVAL
+        reap_at = time.monotonic() + REAP_INTERVAL
         while not self._terminated:
-            timeout = reap_at - time.time()
+            timeout = reap_at - time.monotonic()
             timeout = max(timeout, 0)
             items = dict(self.poller.poll(timeout * 1000))
 
@@ -536,8 +591,8 @@ class PyreNode(object):
                 self.recv_peer()
             if self.beacon_socket in items and items[self.beacon_socket] == zmq.POLLIN:
                 self.recv_beacon()
-            if time.time() >= reap_at:
-                reap_at = time.time() + REAP_INTERVAL
+            if time.monotonic() >= reap_at:
+                reap_at = time.monotonic() + REAP_INTERVAL
                 # Ping all peers and reap any expired ones
                 for peer_id in self.peers.copy().keys():
                     self.ping_peer(peer_id)

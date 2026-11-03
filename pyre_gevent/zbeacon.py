@@ -532,8 +532,8 @@ class ZBeacon(object):
             self.transmit = request.pop(0)
             if self.interval == 0:
                 self.interval = INTERVAL_DFLT
-            # Start broadcasting immediately
-            self.ping_at = time.time()
+            # Start broadcasting immediately (monotonic: immune to NTP steps)
+            self.ping_at = time.monotonic()
         elif command == "SILENCE":
             self.transmit = None
         elif command == "SUBSCRIBE":
@@ -613,7 +613,7 @@ class ZBeacon(object):
         while not self.terminated:
             timeout = 1
             if self.transmit and self.udp_ready:
-                timeout = self.ping_at - time.time()
+                timeout = self.ping_at - time.monotonic()
                 if timeout < 0:
                     timeout = 0
             # Poll on API pipe and on UDP socket
@@ -627,9 +627,9 @@ class ZBeacon(object):
             ):
                 self.handle_udp()
 
-            if self.transmit and self.udp_ready and time.time() >= self.ping_at:
+            if self.transmit and self.udp_ready and time.monotonic() >= self.ping_at:
                 self.send_beacon()
-                self.ping_at = time.time() + self.interval
+                self.ping_at = time.monotonic() + self.interval
 
 
 if __name__ == "__main__":

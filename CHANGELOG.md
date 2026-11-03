@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.1] - 2026-11-03
+
+Peer lifecycle hardening aligned with Cleep Desktop pyre-ts (false offline /
+failed rediscovery after mailbox drop, sleep, or NTP steps).
+
+### Fixed
+- Reopen the outbound DEALER mailbox and re-send HELLO when a peer is
+  disconnected or its TCP endpoint changes (`require_peer`, evasive `ping_peer`)
+  instead of staying “online” on UDP beacons alone with a dead TCP path
+- Reset `sent_sequence` / `want_sequence` on mailbox reconnect so HELLO starts
+  at sequence 1 again
+- Call `peer.disconnect()` in `remove_peer` (do not wait for GC); purge peers by
+  `last_endpoint` after disconnect
+- Replace JOIN/LEAVE `assert` status checks with a warning + `set_status`
+  resync so a counter mismatch cannot kill the node greenlet
+- Use `time.monotonic()` for peer evasive/expired deadlines and beacon
+  intervals (Raspberry Pi NTP steps / no RTC no longer mass-expire peers or
+  stall beacon transmit)
+- On UDP beacon, only extend expiry (`refresh_expiry`), not the evasive timer,
+  so a half-open TCP mailbox still gets a PING after `PEER_EVASIVE`
+
+### Changed
+- Beacon presence no longer fully `refresh()`es peers (evasive + expired); TCP
+  liveness probes can run while UDP still prevents hard expiry
+
 ## [1.0.0] - 2026-10-12
 
 First stable release (out of 0.x). Hardens ZRE discovery for long-running Cleep

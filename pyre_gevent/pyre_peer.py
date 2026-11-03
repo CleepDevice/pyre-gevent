@@ -16,10 +16,11 @@ class PyrePeer(object):
         self.mailbox = None      # Socket through to peer
         self.identity = identity # Identity UUID
         self.endpoint = None     # Endpoint connected to
+        self.last_endpoint = ""  # Survives disconnect for reconnect/purge
         self.name = "notset"     # Peer's public name
         self.origin = "unknown"  # Origin node's public name
-        self.evasive_at = 0      # Timestamp when peer becomes evasive
-        self.expired_at = 0      # Timestamp when peer is considered expired
+        self.evasive_at = 0      # Timestamp when peer becomes evasive (monotonic)
+        self.expired_at = 0      # Timestamp when peer is considered expired (monotonic)
         self.connected = False   # Peer will send messages
         self.ready = False       # Peer has said Hello to us
         self.status = 0          # Our status counter
@@ -58,8 +59,12 @@ class PyrePeer(object):
 
         self.mailbox.connect(endpoint)
         self.endpoint = endpoint
+        self.last_endpoint = endpoint
         self.connected = True
         self.ready = False
+        # Fresh mailbox ⇒ fresh ZRE sequences so remote HELLO expects 1 again.
+        self.sent_sequence = 0
+        self.want_sequence = 0
 
     # Disconnect peer mailbox
     # No more messages will be sent to peer until connected again
@@ -118,11 +123,23 @@ class PyrePeer(object):
             return ""
     # end get_endpoint
 
-    # Register activity at peer
+    def get_last_endpoint(self):
+        return self.last_endpoint or ""
+    # end get_last_endpoint
+
+    # Register activity at peer (real ZRE traffic: HELLO/PING/WHISPER/…)
     def refresh(self):
-        self.evasive_at = time.time() + self.PEER_EVASIVE
-        self.expired_at = time.time() + self.PEER_EXPIRED
+        # Monotonic deadlines: immune to NTP step / suspend wall-clock jumps.
+        now = time.monotonic()
+        self.evasive_at = now + self.PEER_EVASIVE
+        self.expired_at = now + self.PEER_EXPIRED
     # end refresh
+
+    # UDP beacon presence only: keep peer from expiring, but do not reset
+    # evasive_at so a dead TCP mailbox still gets a PING after PEER_EVASIVE.
+    def refresh_expiry(self):
+        self.expired_at = time.monotonic() + self.PEER_EXPIRED
+    # end refresh_expiry
 
     # Return peer name
     def get_name(self):

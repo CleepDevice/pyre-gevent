@@ -5,7 +5,7 @@ except ImportError:
 
 setup(
     name="pyre-gevent",
-    version="1.0.0",
+    version="1.0.1",
     description="Python ZRE implementation (green version)",
     author="Arnaud Loonstra",
     author_email="arnaud@sphaero.org",
