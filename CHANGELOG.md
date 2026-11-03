@@ -24,6 +24,8 @@ failed rediscovery after mailbox drop, sleep, or NTP steps).
 ### Changed
 - Beacon presence no longer fully `refresh()`es peers (evasive + expired); TCP
   liveness probes can run while UDP still prevents hard expiry
+- CI publish workflow uses Python 3.12 (`ubuntu-latest` no longer ships 3.9
+  builds); runtime requirement remains `python_requires>=3.9`
 
 ## [1.0.0] - 2026-10-12
 
